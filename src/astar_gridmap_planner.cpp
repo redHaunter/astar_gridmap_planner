@@ -29,15 +29,15 @@ public:
     : tfListener_(tfBuffer_) {
 
     pnh.param("grid_map_topic", grid_map_topic_, std::string("/elevation_mapping/elevation_map_raw"));
-    pnh.param("traversability_layer", layer_, std::string("inferenced_traversability"));
+    pnh.param("traversability_layer", layer_, std::string("traversability"));
     pnh.param("path_topic", path_topic_, std::string("/planned_path"));
     pnh.param("cost_scale", cost_scale_, 100.0);
-    pnh.param("traversability_obstacle_threshold", obstacle_threshold_, 0.7);
+    pnh.param("traversability_obstacle_threshold", obstacle_threshold_, 0.5);
     pnh.param("allow_diagonal", allow_diagonal_, true);
     pnh.param("map_frame", map_frame_, std::string("odom"));
 
     gridMapSub_ = nh.subscribe(grid_map_topic_, 1, &AStarPlanner::gridMapCallback, this);
-    odomSub_ = nh.subscribe("odom", 1, &AStarPlanner::odomCallback, this);
+    odomSub_ = nh.subscribe("/spot/odometry", 1, &AStarPlanner::odomCallback, this);
     goalSub_ = nh.subscribe("/move_base_simple/goal", 1, &AStarPlanner::goalCallback, this);
     pathPub_ = nh.advertise<nav_msgs::Path>(path_topic_, 1, true);
     ROS_INFO_STREAM("Travesability_Threshold: " << obstacle_threshold_);

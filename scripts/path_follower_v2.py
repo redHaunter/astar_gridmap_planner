@@ -19,10 +19,10 @@ class PathFollower:
         rospy.init_node('path_follower_node', anonymous=True)
 
         # Publishers and Subscribers
-        self.path_sub = rospy.Subscriber("/art_planner/path", Path, self.path_callback)
-        self.odom_sub = rospy.Subscriber("/odom", Odometry, self.odom_callback)
-        self.cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=10)
-        self.smooth_path_pub = rospy.Publisher("/art_planner/smooth_path", Path, queue_size=1)
+        self.path_sub = rospy.Subscriber("/planned_path", Path, self.path_callback)
+        self.odom_sub = rospy.Subscriber("/spot/odometry", Odometry, self.odom_callback)
+        self.cmd_vel_pub = rospy.Publisher("/spot/cmd_vel", Twist, queue_size=10)
+        self.smooth_path_pub = rospy.Publisher("/smooth_path", Path, queue_size=1)
 
         # Robot state
         self.robot_position = None
