@@ -15,11 +15,8 @@ class PathCollector:
         # Publisher for MarkerArray to visualize all stored paths
         self.marker_pub = rospy.Publisher("/path_array", MarkerArray, queue_size=10)
 
-        # Store received paths
-        self.paths = []
-
-        # ID counter for markers
-        self.marker_id = 0
+        # Store received paths and their colors
+        self.paths_with_colors = []
 
         # Timer to publish paths at regular intervals
         rospy.Timer(rospy.Duration(1.0), self.publish_paths)  # 1 Hz
@@ -27,8 +24,11 @@ class PathCollector:
     def path_callback(self, msg):
         rospy.loginfo("Received new path with %d poses", len(msg.poses))
 
-        # Store the path
-        self.paths.append(msg)
+        # Assign a random color once when the path is received
+        color = self.get_random_color()
+
+        # Store as a tuple (path, color)
+        self.paths_with_colors.append((msg, color))
 
     def get_random_color(self):
         """Generate a random RGB color with full alpha."""
@@ -37,17 +37,16 @@ class PathCollector:
     def publish_paths(self, event):
         marker_array = MarkerArray()
 
-        for idx, path in enumerate(self.paths):
+        for idx, (path, color) in enumerate(self.paths_with_colors):
             marker = Marker()
             marker.header = path.header
             marker.ns = "paths"
             marker.id = idx
             marker.type = Marker.LINE_STRIP
             marker.action = Marker.ADD
-            marker.scale.x = 0.05  # line width
+            marker.scale.x = 0.2
 
-            # Get a unique color per path
-            color = self.get_random_color()
+            # Use stored color
             marker.color.r = color[0]
             marker.color.g = color[1]
             marker.color.b = color[2]
