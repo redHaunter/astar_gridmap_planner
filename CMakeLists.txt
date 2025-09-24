@@ -138,7 +138,9 @@ include_directories(
 ## The recommended prefix ensures that target names across packages don't collide
 # add_executable(${PROJECT_NAME}_node src/astar_gridmap_planner_node.cpp)
 add_executable(astar_gridmap_planner src/astar_gridmap_planner.cpp)
+add_executable(elevation_planner src/astar_gridmap_2p5d_planner.cpp)
 target_link_libraries(astar_gridmap_planner ${catkin_LIBRARIES})
+target_link_libraries(elevation_planner ${catkin_LIBRARIES})
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
 ## target back to the shorter version for ease of user use
