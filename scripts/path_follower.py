@@ -106,7 +106,7 @@ class PathFollower:
     #     smoothed.append(points[-1])  # Always include last point
     #     return smoothed
 
-    def smooth_path(self, points, smoothing=0.0, resolution=100):
+    def smooth_path(self, points, smoothing=1.0, resolution=100):
         if has_scipy and len(points) >= 3:
             try:
                 x, y = zip(*points)

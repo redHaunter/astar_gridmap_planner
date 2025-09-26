@@ -49,7 +49,7 @@ public:
     // parameters
     pnh.param<std::string>("grid_map_topic", grid_map_topic_, "/elevation_mapping/elevation_map_raw");
     pnh.param<std::string>("elevation_layer", elevation_layer_, "elevation");
-    pnh.param<std::string>("traversability_layer", trav_layer_, "traversability");
+    pnh.param<std::string>("traversability_layer", trav_layer_, "inferenced_traversability");
     pnh.param<std::string>("path_topic", path_topic_, "/planned_path");
     pnh.param<std::string>("map_frame", map_frame_, std::string("odom"));
 
