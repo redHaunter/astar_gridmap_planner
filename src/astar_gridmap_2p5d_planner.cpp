@@ -53,7 +53,7 @@ public:
     pnh.param<std::string>("path_topic", path_topic_, "/planned_path");
     pnh.param<std::string>("map_frame", map_frame_, std::string("odom"));
 
-    pnh.param<double>("traversability_threshold", trav_threshold_, 0.2);
+    pnh.param<double>("traversability_threshold", trav_threshold_, 0.5);
     pnh.param<double>("cost_scale", cost_scale_, 100.0);
     pnh.param<double>("max_step_up", max_step_up_, 0.25);   // meters
     pnh.param<double>("max_drop_down", max_drop_down_, 0.5); // meters
@@ -226,14 +226,21 @@ private:
 
     // heuristic: Euclidean in 3D
     auto heuristic = [&](const Eigen::Array2i &a, const Eigen::Array2i &b)->double {
-      Position pa, pb; double za, zb;
-      gridMap_.getPosition(a, pa); za = gridMap_.at(elevation_layer_, a);
-      gridMap_.getPosition(b, pb); zb = gridMap_.at(elevation_layer_, b);
+      Position pa, pb;
+      gridMap_.getPosition(a, pa);
+      gridMap_.getPosition(b, pb);
+      double za = gridMap_.at(elevation_layer_, a);
+      double zb = gridMap_.at(elevation_layer_, b);
       double dx = pa.x() - pb.x();
       double dy = pa.y() - pb.y();
       double dz = za - zb;
-      return std::sqrt(dx*dx + dy*dy + dz*dz);
+      double d3D = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+      double trav = gridMap_.at(trav_layer_, a);
+      double alpha = 50.0; // tune this
+      return d3D + alpha * (1.0 - trav);
     };
+
 
     // init
     Node s; s.idx = start_idx; s.g = 0.0; s.f = heuristic(start_idx, goal_idx); s.has_parent = false;
@@ -330,7 +337,7 @@ private:
       ps.header.stamp = ros::Time::now();
       ps.pose.position.x = p.x();
       ps.pose.position.y = p.y();
-      ps.pose.position.z = z;
+      ps.pose.position.z = 1.0; //for better visualization in rviz
       ps.pose.orientation.w = 1.0;
       out.poses.push_back(ps);
     }
