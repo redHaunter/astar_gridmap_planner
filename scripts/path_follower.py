@@ -35,7 +35,24 @@ class PathFollower:
         self.linear_velocity = 0.2
         self.angular_velocity = 0.5
 
-        self.rate = rospy.Rate(10)
+        # Control parameters
+        self.k_linear = 0.5
+        self.k_angular = 1.0
+        self.max_linear = 0.5
+        self.min_linear = 0.15
+        self.max_angular = 1.0
+        self.distance_threshold = 0.1  # distance to consider waypoint reached
+        self.angle_deadband = math.radians(3)  # ignore small angle errors
+
+        # Previous command for smoothing
+        self.prev_linear = 0.0
+        self.prev_angular = 0.0
+
+        # Maximum rate of change per cycle (Δv / Δt)
+        self.max_linear_accel = 0.15   # m/s per 0.05s (20 Hz), i.e. ~1.0 m/s²
+        self.max_angular_accel = 0.05   # rad/s per 0.05s (20 Hz), i.e. ~2.0 rad/s²
+
+        self.rate = rospy.Rate(20)
 
     def path_callback(self, msg):
         if self.is_following_path:
@@ -56,6 +73,9 @@ class PathFollower:
 
         # Smooth the path
         smooth_points = self.smooth_path(raw_points)
+        print(len(smooth_points))
+        smooth_points = self.sample_path(smooth_points, step=0.3)
+        print(len(smooth_points))
 
         # Check if robot is already at the last goal
         last_x, last_y = smooth_points[-1]
@@ -83,28 +103,6 @@ class PathFollower:
         self.is_following_path = True
         rospy.loginfo("Started following smoothed path with {} points.".format(len(self.path)))
 
-    # def smooth_path(self, points, angle_threshold_deg=20):
-    #     if len(points) < 3:
-    #         return points  # Not enough points to smooth
-
-    #     def angle_between(p1, p2):
-    #         return math.atan2(p2[1] - p1[1], p2[0] - p1[0])
-
-    #     smoothed = [points[0]]
-    #     prev_angle = angle_between(points[0], points[1])
-
-    #     for i in range(1, len(points) - 1):
-    #         current_angle = angle_between(points[i], points[i + 1])
-    #         angle_diff = abs(current_angle - prev_angle)
-    #         angle_diff = (angle_diff + math.pi) % (2 * math.pi) - math.pi  # Normalize to [-pi, pi]
-
-    #         if abs(angle_diff) * 180 / math.pi > angle_threshold_deg:
-    #             smoothed.append(points[i])  # Keep point only if angle changes too much
-
-    #         prev_angle = current_angle
-
-    #     smoothed.append(points[-1])  # Always include last point
-    #     return smoothed
 
     def smooth_path(self, points, smoothing=1.0, resolution=100):
         if has_scipy and len(points) >= 3:
@@ -120,6 +118,50 @@ class PathFollower:
         else:
             rospy.loginfo("Scipy not available or path too short, using linear interpolation.")
             return points
+        
+    def sample_path(self, points, step=0.1):
+        """
+        Resample the path so that consecutive points are spaced at least `step` meters apart.
+        """
+        if not points:
+            return []
+
+        sampled = [points[0]]
+        last_x, last_y = points[0]
+
+        for x, y in points[1:]:
+            dist = math.hypot(x - last_x, y - last_y)
+            if dist >= step:
+                sampled.append((x, y))
+                last_x, last_y = x, y
+
+        # Make sure the final point is included
+        if sampled[-1] != points[-1]:
+            sampled.append(points[-1])
+
+        return sampled
+    
+    def smooth_cmd(self, target_linear, target_angular):
+        """
+        Smooth velocity commands by limiting acceleration and angular acceleration.
+        """
+        # Linear
+        linear_diff = target_linear - self.prev_linear
+        max_linear_step = self.max_linear_accel
+        if abs(linear_diff) > max_linear_step:
+            target_linear = self.prev_linear + math.copysign(max_linear_step, linear_diff)
+
+        # Angular
+        angular_diff = target_angular - self.prev_angular
+        max_angular_step = self.max_angular_accel
+        if abs(angular_diff) > max_angular_step:
+            target_angular = self.prev_angular + math.copysign(max_angular_step, angular_diff)
+
+        # Update previous for next iteration
+        self.prev_linear = target_linear
+        self.prev_angular = target_angular
+
+        return target_linear, target_angular
 
     def skip_loops_in_path(self, points, distance_threshold=0.1, min_index_gap=3):
         """
@@ -188,57 +230,62 @@ class PathFollower:
         dy = goal_pose.position.y - self.robot_position.y
         return math.atan2(dy, dx)
 
+    def normalize_angle(self, angle):
+        return (angle + math.pi) % (2 * math.pi) - math.pi
+    
     def follow_path(self):
         if not self.path:
-            # Final orientation alignment skipped here (since we're rolling back)
-            self.cmd_vel_pub.publish(Twist())
+            self.cmd_vel_pub.publish(Twist())  # stop
             self.is_following_path = False
             return
-        
+
         # Align before starting
         if self.aligning_to_goal_direction:
             aligned = self.align_with_goal_direction(self.path[-1].pose)
             if aligned:
                 self.aligning_to_goal_direction = False
+                self.cmd_vel_pub.publish(Twist())
                 rospy.loginfo("Aligned with goal direction. Beginning movement.")
             else:
                 return  # Keep rotating before moving
-            
-        goal_pose = self.path[0].pose
-        distance = self.get_distance(self.robot_position, goal_pose.position)
-        angle_to_goal = self.get_angle_to_goal(goal_pose)
-        angle_diff = angle_to_goal - self.robot_orientation
-        angle_diff = (angle_diff + math.pi) % (2 * math.pi) - math.pi
 
+        # Take the first waypoint in the path
+        target_pose = self.path[0].pose
+        dx = target_pose.position.x - self.robot_position.x
+        dy = target_pose.position.y - self.robot_position.y
+
+        distance = math.hypot(dx, dy)
+        angle_to_goal = math.atan2(dy, dx)
+        angle_to_goal = self.normalize_angle(angle_to_goal)
+        angle_diff = self.normalize_angle(angle_to_goal - self.robot_orientation)
+
+        # Proportional control
+        linear = self.k_linear * distance
+        linear = max(min(linear, self.max_linear), self.min_linear) if distance > self.distance_threshold else 0.0
+
+        # Apply angular deadband
+        if abs(angle_diff) < self.angle_deadband:
+            angle_diff = 0.0
+        angular = self.k_angular * angle_diff
+        angular = max(min(angular, self.max_angular), -self.max_angular)
+
+        # Smooth the velocity commands before publishing
+        linear_smooth, angular_smooth = self.smooth_cmd(linear, angular)
+        
+        # Publish velocity
         cmd_vel = Twist()
-
-        # === Proportional control gains ===
-        k_linear = 0.5
-        k_angular = 1.0
-        max_linear = 0.4
-        max_angular = 1.0
-        min_linear = 0.2
-
-        if distance > 0.1:
-            # Compute linear and angular speeds
-            linear = k_linear * distance
-            linear = max(min(linear, max_linear), min_linear)
-
-            angular = k_angular * angle_diff
-            angular = max(min(angular, max_angular), -max_angular)
-
-            # Reverse logic if goal is behind
-            if abs(angle_diff) > 2 * math.pi / 3:
-                linear *= -1
-                angular *= -1
-
-            cmd_vel.linear.x = linear
-            cmd_vel.angular.z = angular
-        else:
-            rospy.loginfo("Reached waypoint.")
-            self.path.pop(0)
-
+        cmd_vel.linear.x = linear_smooth
+        cmd_vel.angular.z = angular_smooth
         self.cmd_vel_pub.publish(cmd_vel)
+
+        # Check if waypoint reached
+        if distance < self.distance_threshold:
+            # Remove reached waypoint
+            self.path.pop(0)
+            if not self.path:
+                rospy.loginfo("Reached final waypoint.")
+                self.is_following_path = False
+
 
     def run(self):
         while not rospy.is_shutdown():
