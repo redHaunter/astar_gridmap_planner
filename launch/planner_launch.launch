@@ -1,4 +1,7 @@
 <launch>
+    <!-- Define an argument to switch between path_follow versions -->
+    <arg name="v2" default="false" />
+
     <!-- Launch the C++ elevation_planner node -->
     <node 
         pkg="astar_gridmap_planner" 
@@ -7,11 +10,21 @@
         output="screen" 
     />
 
-    <!-- Launch the Python path_follower node -->
+    <!-- Default Python node (runs if v2 is false) -->
     <node 
         pkg="astar_gridmap_planner" 
         type="path_follower.py" 
         name="path_follower" 
         output="screen" 
+        unless="$(arg v2)"
+    />
+
+    <!-- V2 Python node (runs if v2 is true) -->
+    <node 
+        pkg="astar_gridmap_planner" 
+        type="path_follower_v2.py" 
+        name="path_follow_v2" 
+        output="screen" 
+        if="$(arg v2)"
     />
 </launch>
