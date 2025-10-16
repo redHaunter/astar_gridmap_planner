@@ -1,0 +1,17 @@
+<launch>
+    <!-- Launch the C++ elevation_planner node -->
+    <node 
+        pkg="astar_gridmap_planner" 
+        type="elevation_planner" 
+        name="elevation_planner" 
+        output="screen" 
+    />
+
+    <!-- Launch the Python path_follower node -->
+    <node 
+        pkg="astar_gridmap_planner" 
+        type="path_follower.py" 
+        name="path_follower" 
+        output="screen" 
+    />
+</launch>
