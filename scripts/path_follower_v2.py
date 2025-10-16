@@ -241,8 +241,6 @@ class PathFollower:
                 next_index += 1
             else:
                 break
-        print(last_valid_index)
-        print("hrtr")
         return last_valid_index
         
     def is_point_on_line(self, p1, p2, p3, threshold=0.01):
