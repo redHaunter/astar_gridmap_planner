@@ -53,16 +53,17 @@ public:
     pnh.param<std::string>("path_topic", path_topic_, "/planned_path");
     pnh.param<std::string>("map_frame", map_frame_, std::string("odom"));
 
-    pnh.param<double>("traversability_threshold", trav_threshold_, 0.5);
+    pnh.param<double>("traversability_threshold", trav_threshold_, 0.3);
     pnh.param<double>("cost_scale", cost_scale_, 100.0);
     pnh.param<double>("max_step_up", max_step_up_, 0.25);   // meters
     pnh.param<double>("max_drop_down", max_drop_down_, 0.5); // meters
     pnh.param<double>("max_slope_deg", max_slope_deg_, 45.0); // degrees
     pnh.param<double>("vertical_cost_weight", vertical_cost_weight_, 5.0);
     pnh.param<bool>("allow_diagonal", allow_diagonal_, true);
+    pnh.param<double>("elevation_skip_threshold", elevation_skip_threshold_, 0.9);
 
     // neighbor radius (meters) - allows reaching slightly farther traversable cells
-    pnh.param<double>("neighbor_radius", neighbor_radius_, 0.5);
+    pnh.param<double>("neighbor_radius", neighbor_radius_, 0.2);
 
     grid_map_sub_ = nh.subscribe(grid_map_topic_, 1, &AStar2p5DPlanner::gridMapCallback, this);
     odom_sub_ = nh.subscribe("/spot/odometry", 5, &AStar2p5DPlanner::odomCallback, this);
@@ -81,7 +82,8 @@ private:
 
   // params
   std::string grid_map_topic_, elevation_layer_, trav_layer_, path_topic_, map_frame_;
-  double trav_threshold_, cost_scale_, max_step_up_, max_drop_down_, max_slope_deg_, vertical_cost_weight_;
+  double trav_threshold_, cost_scale_, max_step_up_, max_drop_down_, max_slope_deg_, vertical_cost_weight_, elevation_skip_threshold_;
+;
   bool allow_diagonal_;
   double neighbor_radius_;
 
@@ -102,7 +104,7 @@ private:
       gridMap_ = tmp;
       have_map_ = true;
       // (re)compute neighbor offsets when map arrives or resolution changes
-      precomputeNeighborOffsets();
+      precomputeNeighborOffsets(1);
     } catch (std::exception &e) {
       ROS_WARN("GridMap conversion failed: %s", e.what());
       have_map_ = false;
@@ -164,13 +166,14 @@ private:
   }
 
   // precompute neighbor offsets within neighbor_radius_, sorted by distance (closest first)
-  void precomputeNeighborOffsets() {
+  void precomputeNeighborOffsets(int step_size = 1) {
     neighbor_offsets_.clear();
     if (!have_map_) return;
     double res = gridMap_.getResolution();
     int max_steps = std::max(1, static_cast<int>(std::ceil(neighbor_radius_ / res)));
-    for (int dx = -max_steps; dx <= max_steps; ++dx) {
-      for (int dy = -max_steps; dy <= max_steps; ++dy) {
+
+    for (int dx = -max_steps; dx <= max_steps; dx += step_size) {
+      for (int dy = -max_steps; dy <= max_steps; dy += step_size) {
         if (dx == 0 && dy == 0) continue;
         double dist = std::hypot(dx * res, dy * res);
         if (dist <= neighbor_radius_) {
@@ -178,20 +181,26 @@ private:
         }
       }
     }
-    std::sort(neighbor_offsets_.begin(), neighbor_offsets_.end(), [&](const Eigen::Array2i &a, const Eigen::Array2i &b){
-      double da = std::hypot(a.x() * gridMap_.getResolution(), a.y() * gridMap_.getResolution());
-      double db = std::hypot(b.x() * gridMap_.getResolution(), b.y() * gridMap_.getResolution());
-      return da < db;
-    });
-    // ROS_INFO("Precomputed %zu neighbor offsets (radius=%.2f m, resolution=%.3f m)", neighbor_offsets_.size(), neighbor_radius_, gridMap_.getResolution());
+
+    // sort by distance (closest first)
+    std::sort(neighbor_offsets_.begin(), neighbor_offsets_.end(),
+      [&](const Eigen::Array2i &a, const Eigen::Array2i &b) {
+        double da = std::hypot(a.x() * res, a.y() * res);
+        double db = std::hypot(b.x() * res, b.y() * res);
+        return da > db;
+      });
+
+    // ROS_INFO("Precomputed %zu neighbor offsets (radius=%.2f m, resolution=%.3f m, step=%d)",
+    //          neighbor_offsets_.size(), neighbor_radius_, res, step_size);
   }
+
 
   nav_msgs::Path planPath(const geometry_msgs::PoseStamped &start_pose, const geometry_msgs::PoseStamped &goal_pose) {
     std::lock_guard<std::mutex> lock(map_mutex_);
     nav_msgs::Path out;
     out.header.frame_id = gridMap_.getFrameId();
     out.header.stamp = ros::Time::now();
-
+    
     // positions
     Eigen::Vector2d start_xy(start_pose.pose.position.x, start_pose.pose.position.y);
     Eigen::Vector2d goal_xy(goal_pose.pose.position.x, goal_pose.pose.position.y);
@@ -224,22 +233,54 @@ private:
     std::unordered_map<long long, Node> allNodes; // key->Node
     std::unordered_map<long long, bool> closed;
 
-    // heuristic: Euclidean in 3D
-    auto heuristic = [&](const Eigen::Array2i &a, const Eigen::Array2i &b)->double {
-      Position pa, pb;
-      gridMap_.getPosition(a, pa);
-      gridMap_.getPosition(b, pb);
-      double za = gridMap_.at(elevation_layer_, a);
-      double zb = gridMap_.at(elevation_layer_, b);
-      double dx = pa.x() - pb.x();
-      double dy = pa.y() - pb.y();
-      double dz = za - zb;
-      double d3D = std::sqrt(dx*dx + dy*dy + dz*dz);
+    // // heuristic: Euclidean in 3D
+    // auto heuristic = [&](const Eigen::Array2i &a, const Eigen::Array2i &b)->double {
+    //   Position pa, pb;
+    //   gridMap_.getPosition(a, pa);
+    //   gridMap_.getPosition(b, pb);
+    //   double za = gridMap_.at(elevation_layer_, a);
+    //   double zb = gridMap_.at(elevation_layer_, b);
+    //   double dx = pa.x() - pb.x();
+    //   double dy = pa.y() - pb.y();
+    //   double dz = za - zb;
+    //   double d3D = std::sqrt(dx*dx + dy*dy + dz*dz);
 
-      double trav = gridMap_.at(trav_layer_, a);
-      double alpha = 50.0; // tune this
-      return d3D + alpha * (1.0 - trav);
-    };
+    //   double trav = gridMap_.at(trav_layer_, a);
+    //   double alpha = 50.0; // tune this
+    //   return d3D + alpha * (1.0 - trav);
+    // };
+
+    // heuristic: 3D distance + traversability + local elevation average
+  auto heuristic = [&](const Eigen::Array2i &a, const Eigen::Array2i &b) -> double {
+    Position pa, pb;
+    gridMap_.getPosition(a, pa);
+    gridMap_.getPosition(b, pb);
+    double za = gridMap_.at(elevation_layer_, a);
+    double zb = gridMap_.at(elevation_layer_, b);
+    double dx = pa.x() - pb.x();
+    double dy = pa.y() - pb.y();
+    double dz = za - zb;
+    double d3D = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    // Traversability penalty
+    double trav = gridMap_.at(trav_layer_, a);
+    double alpha = 20.0;  // traversability weight
+
+    // Local elevation smoothing cost
+    double elevation_sum = za;
+    int neighbor_count = std::min(8, static_cast<int>(neighbor_offsets_.size()));
+    for (int i = neighbor_offsets_.size() - neighbor_count; i < neighbor_offsets_.size(); ++i) {
+      Eigen::Array2i n_idx = a + neighbor_offsets_[i];
+      if (gridMap_.isValid(n_idx, elevation_layer_)) {
+        elevation_sum += gridMap_.at(elevation_layer_, n_idx);
+      }
+    }
+    double avg_elev = elevation_sum;
+    double beta = 1.0;  // elevation weight (tune as needed)
+
+    return d3D + alpha * (1.0 - trav) + beta * avg_elev;
+  };
+
 
 
     // init
@@ -257,15 +298,39 @@ private:
       if (closed[cur_key]) continue;
       closed[cur_key] = true;
 
-      if ((current.idx == goal_idx).all()) { found = true; break; }
+      // bool near_high_elevation = false;
+      // for (const auto& check_off : neighbor_offsets_) {
+      //     Eigen::Array2i check_idx = current.idx + check_off;
+
+      //     if ((check_idx < 0).any() || (check_idx >= gridMap_.getSize()).any()) 
+      //         continue;
+      //     if (!gridMap_.isValid(check_idx, elevation_layer_)) 
+      //         continue;
+
+      //     double elev_val = gridMap_.at(elevation_layer_, check_idx);
+      //     if (elev_val > elevation_skip_threshold_) {  // e.g. 0.9 m
+      //         near_high_elevation = true;
+      //         break;
+      //     }
+      // }
+      // if (near_high_elevation) {
+      //     // Skip expanding this node entirely
+      //     continue;
+      // }
+
+      // goal check
+      Eigen::Vector2d cur_xy; gridMap_.getPosition(current.idx, cur_xy);
+      if (((cur_xy - goal_xy).norm()) <= 0.1) {   // 10 cm threshold
+          found = true;
+          break;
+      }
 
       // explore neighbors using distance-sorted offsets (allows skipping untraversable immediate cells)
-      Position cur_xy; gridMap_.getPosition(current.idx, cur_xy);
       double cur_z = gridMap_.at(elevation_layer_, current.idx);
       double cur_trav = gridMap_.at(trav_layer_, current.idx);
 
       // ensure neighbor_offsets_ is computed
-      if (neighbor_offsets_.empty()) precomputeNeighborOffsets();
+      if (neighbor_offsets_.empty()) precomputeNeighborOffsets(1);
 
       for (const Eigen::Array2i &off : neighbor_offsets_) {
         Eigen::Array2i nidx = current.idx + off;
@@ -337,7 +402,7 @@ private:
       ps.header.stamp = ros::Time::now();
       ps.pose.position.x = p.x();
       ps.pose.position.y = p.y();
-      ps.pose.position.z = 1.0; //for better visualization in rviz
+      ps.pose.position.z = z + 0.5; //for better visualization in rviz
       ps.pose.orientation.w = 1.0;
       out.poses.push_back(ps);
     }
